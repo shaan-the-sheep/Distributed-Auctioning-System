@@ -1,7 +1,7 @@
 import java.rmi.Remote;
 import java.rmi.RemoteException;
+import javax.crypto.SealedObject;
 
-public interface Auction extends Remote{ 
-   AuctionItem getSpec(int itemID) throws RemoteException;
-   //int factorial(int n) throws RemoteException;
+public interface Auction extends Remote { 
+   public SealedObject getSpec(int itemID) throws RemoteException;
 }

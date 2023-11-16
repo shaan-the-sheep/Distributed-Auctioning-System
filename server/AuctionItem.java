@@ -6,10 +6,6 @@ public class AuctionItem implements Serializable {
     private String description;
     private int highestBid;
 
-    public AuctionItem() {
-        // Default constructor
-    }
-
     public AuctionItem(int itemID, String name, String description, int highestBid) {
         this.itemID = itemID;
         this.name = name;
@@ -32,6 +28,4 @@ public class AuctionItem implements Serializable {
     public int getHighestBid() {
         return highestBid;
     }
-
-    // Constructors, getters, setters, and any other necessary methods.
 }
