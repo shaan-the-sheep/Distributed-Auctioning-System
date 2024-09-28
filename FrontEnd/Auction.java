@@ -19,4 +19,6 @@ public AuctionItem[] listItems(int userID, String token) throws RemoteException;
 public AuctionResult closeAuction(int userID, int itemID, String token) throws RemoteException;
 
 public boolean bid(int userID, int itemID, int price, String token) throws RemoteException;
+
+public int getPrimaryReplicaID() throws RemoteException;
 }

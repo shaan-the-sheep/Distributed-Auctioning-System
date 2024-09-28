@@ -1,52 +1,60 @@
-import java.io.*;
-import java.nio.file.*;
-import java.rmi.*;
-import java.rmi.registry.*;
-import java.rmi.server.*;
-import java.security.*;
-import java.security.spec.*;
+import java.rmi.RemoteException;
+import java.rmi.registry.LocateRegistry;
+import java.rmi.registry.Registry;
+import java.rmi.server.UnicastRemoteObject;
+import java.security.PublicKey;
 import java.util.*;
-import java.util.concurrent.*;
+import java.util.stream.Collectors;
 
-/**
- * This class represents the server in the auction system.
- * It implements the Auction interface for remote method invocation.
- * Uses asymmetric cryptographic authentication.
- */
-public class Server implements Auction {
-    private List<AuctionItem> auctionItems;
-    private Map<Integer, String> registeredUsers;
-    private Map<Integer, PublicKey> userPubKeys;
-    private Map<Integer, String> userTokens;
-    private Map<Integer, String> userChallenges;
-    private List<Replica> replicas;
-    private int primaryReplicaID;
+public class Replica implements Auction {
+    private List<AuctionItem> auctionItems = new ArrayList<>();
+    private Map<Integer, String> registeredUsers = new HashMap<>();
+    private Map<Integer, PublicKey> userPubKeys = new HashMap<>();
+    private int replicaID;
 
-    /**
-     * Constructor for the Server class.
-     * Initialises the server with necessary data structures and generates/reads the server's public key.
-     */
-    public Server() throws RemoteException {
-        auctionItems = new ArrayList<>();
-        registeredUsers = new HashMap<>();
-        userPubKeys = new HashMap<>();
-        userTokens = new ConcurrentHashMap<>();
-        userChallenges = new ConcurrentHashMap<>();
-        replicas = new ArrayList<>();
+    public Replica(int replicaID) throws RemoteException {
+        this.replicaID = replicaID;
+        this.auctionItems = new ArrayList<>();
+        this.registeredUsers = new HashMap<>();
+        this.userPubKeys = new HashMap<>();
 
-        for (int i = 1; i <= 3; i++) {
-            Replica replica = new Replica(i);
-            replicas.add(replica);
-        }
-        primaryReplicaID = 3;
+        updateReplicas();
+    }
 
+    private void updateReplicas() {
         try {
-            File kFile = new File("../keys/serverKey.pub");
-            PublicKey serverPubKey = kFile.exists() ? readPublicKey(kFile) : generateAndStoreServerKey();
+            Registry registry = LocateRegistry.getRegistry();
+            List<Replica> existingReplicas = Arrays.stream(registry.list())
+                    .filter(name -> name.startsWith("Replica") && !name.equals("Replica" + replicaID))
+                    .map(name -> {
+                        try {
+                            return (Replica) registry.lookup(name);
+                        } catch (Exception e) {
+                            System.out.println("Failed to connect to: " + name);
+                            return null;
+                        }
+                    })
+                    .filter(Objects::nonNull)
+                    .collect(Collectors.toList());
+
+            existingReplicas.forEach(backUp -> backUp.updateSharedVariable(auctionItems, registeredUsers, userPubKeys));
         } catch (Exception e) {
-            throw new RemoteException("Error initializing server.", e);
+            e.printStackTrace();
         }
     }
+
+    private void updateSharedVariable(List<AuctionItem> items, Map<Integer, String> reg, Map<Integer, PublicKey> keys) {
+        auctionItems = new ArrayList<>(items);
+        registeredUsers = new HashMap<>(reg);
+        userPubKeys = new HashMap<>(keys);
+    }
+
+    private void copyDataFromReplica(Replica replica) {
+        auctionItems = new ArrayList<>(replica.auctionItems);
+        registeredUsers = new HashMap<>(replica.registeredUsers);
+        userPubKeys = new HashMap<>(replica.userPubKeys);
+    }
+
 
     /**
      * Registers a new user with the provided email and public key.
@@ -60,6 +68,7 @@ public class Server implements Auction {
         int userID = registeredUsers.size() + 1;
         registeredUsers.put(userID, email);
         userPubKeys.put(userID, pubkey);
+        updateReplicas();
         return userID;
     }
 
@@ -120,6 +129,7 @@ public class Server implements Auction {
         auctionItem.name = item.name;
         auctionItem.description = item.description;
         auctionItems.add(auctionItem);
+        updateReplicas();
         return itemID;
     }
 
@@ -152,7 +162,7 @@ public class Server implements Auction {
         result.winningPrice = item.highestBid;
 
         auctionItems.remove(item);
-
+        updateReplicas();
         return result;
     }
 
@@ -178,89 +188,50 @@ public class Server implements Auction {
 
         if (price > item.highestBid) {
             item.highestBid = price;
+            updateReplicas();
             return true;
         } else {
+            updateReplicas();
             return false;
         }
     }
 
     @Override
-    public int getPrimaryReplicaID() throws RemoteException {
-        return primaryReplicaID;
+    public int getPrimaryReplicaID() throws RemoteException{
+        return replicaID;
     }
 
-    /**
-     * Stores the provided public key to a file.
-     *
-     * @param publicKey the public key to be stored
-     * @param filePath  the path to the file
-     */
-    public void storePublicKey(PublicKey publicKey, String filePath) throws IOException {
-        byte[] publicKeyBytes = publicKey.getEncoded();
-        String publicKeyBase64 = Base64.getEncoder().encodeToString(publicKeyBytes);
+    // Getter method for auctionItems
+    public List<AuctionItem> getAuctionItems() {
+        return auctionItems;
+    }
 
-        try (FileOutputStream fos = new FileOutputStream(filePath)) {
-            fos.write(publicKeyBase64.getBytes());
+    // Getter method for registeredUsers
+    public Map<Integer, String> getRegisteredUsers() {
+        return registeredUsers;
+    }
+
+    // Getter method for userPubKeys
+    public Map<Integer, PublicKey> getUserPubKeys() {
+        return userPubKeys;
+    }
+
+    public static void main(String[] args) throws RemoteException {
+        if (args.length < 1) {
+            System.out.println("Usage: java Replica <replicaID>");
+            return;
         }
-    }
 
-    /**
-     * Reads a public key from the specified file.
-     *
-     * @param file the file containing the public key
-     * @return the PublicKey object read from the file
-     * @throws IOException            if an I/O-related exception occurs
-     */
-    private PublicKey readPublicKey(File file) throws IOException, ClassNotFoundException {
-        try (ObjectInputStream f = new ObjectInputStream(new FileInputStream(file))) {
-            return (PublicKey) f.readObject();
-        }
-    }
+        int replicaID = Integer. parseInt(args[0]);
+        String replicaName = "Replica" + replicaID;
+        Replica s = new Replica(replicaID);   
 
-    /**
-     * Generates a new key pair, stores the public key, and returns the public key.
-     *
-     * @return the generated public key
-     * @throws Exception if an error occurs during key pair generation or public key storage
-     */
-    private PublicKey generateAndStoreServerKey() throws Exception {
-        KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
-        generator.initialize(2048);
-        KeyPair pair = generator.generateKeyPair();
-        PublicKey serverPubKey = pair.getPublic();
-        storePublicKey(serverPubKey, "../keys/serverKey.pub");
-        return serverPubKey;
-    }
+        Auction stub = (Auction) UnicastRemoteObject.exportObject(s, 0);
+        Registry registry = LocateRegistry.getRegistry();
+        registry.rebind(replicaName, stub);
+        System.out.println(replicaName + " ready");
+        //System.out.println("Server ready");
 
-    /**
-     * Loads a private key from the specified file.
-     *
-     * @param filePath the path to the file containing the private key
-     * @return the PrivateKey object loaded from the file
-     */
-    private PrivateKey loadPrivateKey(String filePath) throws Exception {
-        byte[] keyBytes = Files.readAllBytes(Paths.get(filePath));
-        PKCS8EncodedKeySpec spec = new PKCS8EncodedKeySpec(keyBytes);
-        KeyFactory keyFactory = KeyFactory.getInstance("RSA");
-        return keyFactory.generatePrivate(spec);
-    }
-
-    /**
-     * Main method to start the server and bind it to the RMI registry.
-     *
-     * @param args command line arguments
-     */
-    public static void main(String[] args) {
-        try {
-            Server s = new Server();
-            String name = "myserver";
-            Auction stub = (Auction) UnicastRemoteObject.exportObject(s, 0);
-            Registry registry = LocateRegistry.getRegistry();
-            registry.rebind(name, stub);
-            System.out.println("Server ready");
-        } catch (Exception e) {
-            System.err.println("Exception:");
-            e.printStackTrace();
-        }
+ 
     }
 }
